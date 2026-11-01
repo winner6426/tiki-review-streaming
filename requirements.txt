@@ -1,0 +1,4 @@
+kafka-python==2.3.2
+tqdm
+requests
+pandas
