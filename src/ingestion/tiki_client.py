@@ -44,32 +44,45 @@ class RateLimiter:
     """Giới hạn tốc độ chung cho mọi luồng: các request cách nhau ít nhất 1/rate giây.
 
     Khi bị chặn, `pause()` dừng toàn bộ luồng đến khi hết thời gian chờ.
+    burst: cứ sau `burst` request thì tự nghỉ `cooldown` giây (API listing chặn theo tổng số request
+    chứ không theo tốc độ, xem docs/NOTE.md). None: không nghỉ.
     """
 
-    def __init__(self, rate: float, stop: threading.Event):
+    def __init__(self, rate: float, stop: threading.Event,
+                 burst: int | None = None, cooldown: float = 600):
         self.interval = 1.0 / rate
         self.stop = stop
+        self.burst = burst
+        self.cooldown = cooldown
         self._lock = threading.Lock()
         self._next = 0.0
+        self._sent = 0   # số request từ lần nghỉ / bị chặn gần nhất
 
     def wait(self):
         with self._lock:
             now = time.monotonic()
             slot = max(now, self._next)
             self._next = slot + self.interval
+            self._sent += 1
+            if self.burst and self._sent >= self.burst:
+                self._sent = 0
+                self._next = slot + self.cooldown
+                log.info("Đã gửi %d request, tự nghỉ %ds để tránh bị chặn", self.burst, self.cooldown)
         if self.stop.wait(max(0.0, slot - time.monotonic())):
             raise Stopped()
 
     def pause(self, seconds: float):
         with self._lock:
             self._next = max(self._next, time.monotonic() + seconds)
+            self._sent = 0
 
 
 class TikiClient:
     def __init__(self, rate: float = 2.5, block_wait: float = 420,
-                 max_blocks: int = 3, stop: threading.Event | None = None):
+                 max_blocks: int = 3, stop: threading.Event | None = None,
+                 burst: int | None = None, cooldown: float = 600):
         self.stop = stop or threading.Event()
-        self.limiter = RateLimiter(rate, self.stop)
+        self.limiter = RateLimiter(rate, self.stop, burst, cooldown)
         self.block_wait = block_wait
         self.max_blocks = max_blocks
         self._local = threading.local()

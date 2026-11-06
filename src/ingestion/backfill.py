@@ -334,9 +334,9 @@ def step_status(out: Path, rate: float):
     if cat_file.exists():
         leaves = json.loads(cat_file.read_text(encoding="utf-8"))
         n_listed = len(list((out / "products").glob("category=*.jsonl.gz")))
-        print(f"Danh mục lá:        {n_listed}/{len(leaves)} đã liệt kê sản phẩm")
+        print(f"[products] Danh mục lá:    {n_listed}/{len(leaves)} đã liệt kê sản phẩm")
     else:
-        print("Danh mục lá:        chưa chạy bước `categories`")
+        print("[products] Danh mục lá:    chưa chạy bước `categories`")
         return
     products = load_products(out)
     with_reviews = [p for p in products.values() if p["review_count"] > 0]
@@ -346,10 +346,10 @@ def step_status(out: Path, rate: float):
     size_mb = sum(f.stat().st_size for f in files) / 1e6
     remaining = [p for p in with_reviews if p["id"] not in done]
     rem_req = sum(-(-p["review_count"] // REVIEW_PAGE_SIZE) for p in remaining)
-    print(f"Sản phẩm (đã loại trùng): {len(products)}, có review: {len(with_reviews)}")
-    print(f"Review tổng theo listing: ~{sum(p['review_count'] for p in with_reviews)}")
-    print(f"Đã cào:             {len(done)} sản phẩm, {n_reviews} review, {size_mb:.1f} MB (gzip)")
-    print(f"Còn lại:            {len(remaining)} sản phẩm, ~{sum(p['review_count'] for p in remaining)} review, "
+    print(f"[products] Sản phẩm đã liệt kê (loại trùng): {len(products)}, có review: {len(with_reviews)}")
+    print(f"[products] Tổng review của các sản phẩm này: ~{sum(p['review_count'] for p in with_reviews)}")
+    print(f"[reviews]  Đã cào review:  {len(done)} sản phẩm, {n_reviews} review, {size_mb:.1f} MB (gzip)")
+    print(f"[reviews]  Còn phải cào:   {len(remaining)} sản phẩm, ~{sum(p['review_count'] for p in remaining)} review, "
           f"~{rem_req} request (~{rem_req / rate / 3600:.1f} giờ ở {rate} req/s)")
 
 
@@ -378,6 +378,10 @@ def main():
                     help="dừng khi lần chạy này đã cào đủ số review này")
     ap.add_argument("--min-reviews", type=int, default=1, help="bỏ qua sản phẩm có ít review hơn (mặc định 1)")
     ap.add_argument("--block-wait", type=float, default=420, help="số giây chờ khi bị WAF chặn (mặc định 420)")
+    ap.add_argument("--burst", type=int, default=None,
+                    help="cứ sau ngần này request thì tự nghỉ --cooldown giây (mặc định: không nghỉ). "
+                         "Bước products nên dùng ~150 vì API listing chặn sau ~200 request bất kể tốc độ")
+    ap.add_argument("--cooldown", type=float, default=600, help="số giây tự nghỉ sau mỗi --burst request (mặc định 600)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -397,7 +401,10 @@ def main():
         return
 
     clean_tmp(args.out)
-    client = TikiClient(rate=args.rate, block_wait=args.block_wait)
+    if sys.platform == "win32":   # không cho Windows tự sleep khi đang cào (tự hết hiệu lực khi thoát)
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)   # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+    client = TikiClient(rate=args.rate, block_wait=args.block_wait, burst=args.burst, cooldown=args.cooldown)
     log.info("Bắt đầu `%s`: %.1f req/s, %d luồng, lưu vào %s", args.step, args.rate, args.workers, args.out)
     def run() -> bool:
         if args.step in ("categories", "all"):
